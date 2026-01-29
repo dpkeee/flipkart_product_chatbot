@@ -1,0 +1,27 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: flask-service
+  namespace: default
+  labels:
+    app: flask-app
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "5000"
+    prometheus.io/path: "/metrics"
+spec:
+  type: ClusterIP
+  selector:
+    app: flask-app
+  ports:
+  - name: http
+    port: 80
+    targetPort: 5000
+    protocol: TCP
+
+  # Session affinity for consistent thread_id routing
+  # Note: This is a temporary solution. For production, use Redis for session storage
+  sessionAffinity: ClientIP
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: 10800  # 3 hours

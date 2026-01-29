@@ -1,0 +1,117 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: flask-app-network-policy
+  namespace: default
+  labels:
+    app: flask-app
+spec:
+  podSelector:
+    matchLabels:
+      app: flask-app
+
+  policyTypes:
+  - Ingress
+  - Egress
+
+  # Ingress rules - what can reach flask-app
+  ingress:
+  # Allow traffic from ingress controller
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: ingress-nginx
+    ports:
+    - protocol: TCP
+      port: 5000
+
+  # Allow traffic from same namespace (for service mesh)
+  - from:
+    - podSelector: {}
+    ports:
+    - protocol: TCP
+      port: 5000
+
+  # Allow traffic from monitoring namespace
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: monitoring
+    ports:
+    - protocol: TCP
+      port: 5000
+
+  # Egress rules - what flask-app can reach
+  egress:
+  # Allow DNS resolution
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: kube-system
+    ports:
+    - protocol: UDP
+      port: 53
+
+  # Allow HTTPS to external APIs (Groq, HuggingFace, AstraDB)
+  - to:
+    - namespaceSelector: {}
+    ports:
+    - protocol: TCP
+      port: 443
+
+  # Allow HTTP for external services
+  - to:
+    - namespaceSelector: {}
+    ports:
+    - protocol: TCP
+      port: 80
+
+---
+# Network policy for monitoring namespace
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: monitoring-network-policy
+  namespace: monitoring
+  labels:
+    app: monitoring
+spec:
+  podSelector: {}
+
+  policyTypes:
+  - Ingress
+  - Egress
+
+  # Ingress rules
+  ingress:
+  # Allow traffic within monitoring namespace
+  - from:
+    - podSelector: {}
+
+  # Allow traffic from default namespace (for scraping)
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: default
+
+  # Egress rules
+  egress:
+  # Allow DNS
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: kube-system
+    ports:
+    - protocol: UDP
+      port: 53
+
+  # Allow scraping pods in all namespaces
+  - to:
+    - namespaceSelector: {}
+    ports:
+    - protocol: TCP
+      port: 5000
+
+  # Allow internal monitoring communication
+  - to:
+    - podSelector: {}

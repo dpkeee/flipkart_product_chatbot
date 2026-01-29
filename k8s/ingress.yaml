@@ -1,0 +1,79 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: flask-ingress
+  namespace: default
+  labels:
+    app: flask-app
+  annotations:
+    # GKE-specific annotations
+    kubernetes.io/ingress.class: "gce"
+    kubernetes.io/ingress.global-static-ip-name: "flask-app-ip"  # Reserve static IP first
+
+    # SSL/TLS annotations
+    # Uncomment after setting up managed certificate
+    # networking.gke.io/managed-certificates: "flask-app-cert"
+    # kubernetes.io/ingress.allow-http: "false"  # Redirect HTTP to HTTPS
+
+    # Health check annotations
+    cloud.google.com/backend-config: "flask-backend-config"
+
+    # Timeout settings
+    cloud.google.com/connection-draining-timeout: "30"
+spec:
+  rules:
+  # Update with your domain name
+  - host: flipkart-chatbot.example.com
+    http:
+      paths:
+      - path: /*
+        pathType: ImplementationSpecific
+        backend:
+          service:
+            name: flask-service
+            port:
+              number: 80
+
+  # Default backend (optional)
+  defaultBackend:
+    service:
+      name: flask-service
+      port:
+        number: 80
+
+---
+# Backend configuration for health checks
+apiVersion: cloud.google.com/v1
+kind: BackendConfig
+metadata:
+  name: flask-backend-config
+  namespace: default
+spec:
+  healthCheck:
+    checkIntervalSec: 30
+    timeoutSec: 5
+    healthyThreshold: 2
+    unhealthyThreshold: 3
+    type: HTTP
+    requestPath: /health
+    port: 5000
+
+  # Session affinity
+  sessionAffinity:
+    affinityType: "CLIENT_IP"
+    affinityCookieTtlSec: 10800  # 3 hours
+
+  # Connection draining
+  connectionDraining:
+    drainingTimeoutSec: 30
+
+---
+# Managed Certificate (uncomment after deployment)
+# apiVersion: networking.gke.io/v1
+# kind: ManagedCertificate
+# metadata:
+#   name: flask-app-cert
+#   namespace: default
+# spec:
+#   domains:
+#   - flipkart-chatbot.example.com

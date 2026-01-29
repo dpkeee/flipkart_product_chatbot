@@ -1,0 +1,170 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flask-app
+  namespace: default
+  labels:
+    app: flask-app
+    version: v1.0.0
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: flask-app
+  template:
+    metadata:
+      labels:
+        app: flask-app
+        version: v1.0.0
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "5000"
+        prometheus.io/path: "/metrics"
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+
+      containers:
+      - name: flask-app
+        image: gcr.io/YOUR_PROJECT_ID/flask-app:v1.0.0
+        imagePullPolicy: Always
+
+        ports:
+        - name: http
+          containerPort: 5000
+          protocol: TCP
+
+        env:
+        # Secrets from Kubernetes Secret
+        - name: GROQ_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: flask-secrets
+              key: GROQ_API_KEY
+
+        - name: ASTRA_DB_APPLICATION_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: flask-secrets
+              key: ASTRA_DB_APPLICATION_TOKEN
+
+        - name: ASTRA_DB_API_ENDPOINT
+          valueFrom:
+            secretKeyRef:
+              name: flask-secrets
+              key: ASTRA_DB_API_ENDPOINT
+
+        - name: HF_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: flask-secrets
+              key: HF_TOKEN
+
+        - name: HUGGINGFACEHUB_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: flask-secrets
+              key: HUGGINGFACEHUB_TOKEN
+
+        # ConfigMap values
+        - name: EMBEDDING_MODEL
+          valueFrom:
+            configMapKeyRef:
+              name: flask-config
+              key: EMBEDDING_MODEL
+
+        - name: RAG_MODEL
+          valueFrom:
+            configMapKeyRef:
+              name: flask-config
+              key: RAG_MODEL
+
+        - name: KEYSPACE_NAME
+          valueFrom:
+            configMapKeyRef:
+              name: flask-config
+              key: KEYSPACE_NAME
+
+        - name: COLLECTION_NAME
+          valueFrom:
+            configMapKeyRef:
+              name: flask-config
+              key: COLLECTION_NAME
+
+        - name: FLASK_ENV
+          valueFrom:
+            configMapKeyRef:
+              name: flask-config
+              key: FLASK_ENV
+
+        - name: LOG_LEVEL
+          valueFrom:
+            configMapKeyRef:
+              name: flask-config
+              key: LOG_LEVEL
+
+        # Resource limits
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "500m"
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
+
+        # Liveness probe - checks if container is alive
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 5000
+            scheme: HTTP
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          timeoutSeconds: 5
+          successThreshold: 1
+          failureThreshold: 3
+
+        # Readiness probe - checks if container is ready to serve traffic
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 5000
+            scheme: HTTP
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          successThreshold: 1
+          failureThreshold: 3
+
+        # Security context
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: false
+
+        # Volume mounts for CSV data
+        volumeMounts:
+        - name: data-volume
+          mountPath: /app/data
+          readOnly: true
+
+      # Volumes
+      volumes:
+      - name: data-volume
+        configMap:
+          name: flask-data
+
+      # Restart policy
+      restartPolicy: Always
+
+      # DNS policy
+      dnsPolicy: ClusterFirst
+
+      # Termination grace period
+      terminationGracePeriodSeconds: 30

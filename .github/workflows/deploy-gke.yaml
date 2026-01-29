@@ -1,0 +1,147 @@
+name: Build and Deploy to GKE
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+  workflow_dispatch:
+
+env:
+  PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+  GKE_CLUSTER: flipkart-chatbot-cluster
+  GKE_ZONE: us-central1-a
+  DEPLOYMENT_NAME: flask-app
+  IMAGE_NAME: flask-app
+
+jobs:
+  setup-build-deploy:
+    name: Setup, Build, and Deploy
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Authenticate to Google Cloud
+      uses: google-github-actions/auth@v2
+      with:
+        credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+    - name: Set up Cloud SDK
+      uses: google-github-actions/setup-gcloud@v2
+      with:
+        project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+    - name: Configure Docker for GCR
+      run: |
+        gcloud auth configure-docker
+
+    - name: Get GKE credentials
+      run: |
+        gcloud container clusters get-credentials $GKE_CLUSTER \
+          --zone $GKE_ZONE \
+          --project $PROJECT_ID
+
+    - name: Build Docker image
+      run: |
+        docker build \
+          --tag "gcr.io/$PROJECT_ID/$IMAGE_NAME:$GITHUB_SHA" \
+          --tag "gcr.io/$PROJECT_ID/$IMAGE_NAME:latest" \
+          .
+
+    - name: Push Docker image to GCR
+      run: |
+        docker push "gcr.io/$PROJECT_ID/$IMAGE_NAME:$GITHUB_SHA"
+        docker push "gcr.io/$PROJECT_ID/$IMAGE_NAME:latest"
+
+    - name: Create/Update Kubernetes secrets
+      run: |
+        # Check if secret exists
+        if kubectl get secret flask-secrets -n default >/dev/null 2>&1; then
+          echo "Secret exists, updating..."
+          kubectl delete secret flask-secrets -n default
+        fi
+
+        # Create new secret
+        kubectl create secret generic flask-secrets \
+          --from-literal=GROQ_API_KEY="${{ secrets.GROQ_API_KEY }}" \
+          --from-literal=ASTRA_DB_APPLICATION_TOKEN="${{ secrets.ASTRA_DB_TOKEN }}" \
+          --from-literal=ASTRA_DB_API_ENDPOINT="${{ secrets.ASTRA_DB_ENDPOINT }}" \
+          --from-literal=HF_TOKEN="${{ secrets.HF_TOKEN }}" \
+          --from-literal=HUGGINGFACEHUB_TOKEN="${{ secrets.HF_TOKEN }}" \
+          --namespace=default
+
+    - name: Deploy ConfigMaps
+      run: |
+        kubectl apply -f k8s/namespace.yaml
+        kubectl apply -f k8s/configmap.yaml
+
+        # Create data ConfigMap
+        if kubectl get configmap flask-data -n default >/dev/null 2>&1; then
+          kubectl delete configmap flask-data -n default
+        fi
+        kubectl create configmap flask-data \
+          --from-file=flipkart_product_review.csv=data/flipkart_product_review.csv \
+          --namespace=default
+
+    - name: Update deployment image
+      run: |
+        sed -i "s|gcr.io/YOUR_PROJECT_ID/flask-app:v1.0.0|gcr.io/$PROJECT_ID/$IMAGE_NAME:$GITHUB_SHA|g" k8s/deployment.yaml
+
+    - name: Deploy to GKE
+      run: |
+        kubectl apply -f k8s/deployment.yaml
+        kubectl apply -f k8s/service.yaml
+        kubectl apply -f k8s/hpa.yaml
+        kubectl apply -f k8s/pdb.yaml
+        kubectl apply -f k8s/ingress.yaml
+        kubectl apply -f k8s/network-policy.yaml
+
+    - name: Wait for rollout
+      run: |
+        kubectl rollout status deployment/$DEPLOYMENT_NAME -n default --timeout=5m
+
+    - name: Verify deployment
+      run: |
+        kubectl get pods -n default -l app=flask-app
+        kubectl get svc flask-service -n default
+        kubectl get ingress flask-ingress -n default
+
+    - name: Run health check
+      run: |
+        # Wait for pods to be ready
+        sleep 30
+
+        # Get service endpoint
+        SERVICE_IP=$(kubectl get svc flask-service -n default -o jsonpath='{.spec.clusterIP}')
+
+        # Test health endpoint (from within cluster)
+        kubectl run health-check --rm -i --restart=Never --image=curlimages/curl -- \
+          curl -f http://$SERVICE_IP/health || exit 1
+
+        echo "Health check passed!"
+
+    - name: Notify deployment status
+      if: always()
+      run: |
+        if [ ${{ job.status }} == 'success' ]; then
+          echo "✅ Deployment successful!"
+        else
+          echo "❌ Deployment failed!"
+          exit 1
+        fi
+
+# Required GitHub Secrets:
+# - GCP_PROJECT_ID: Your GCP project ID
+# - GCP_SA_KEY: Service account key JSON (with GKE/GCR permissions)
+# - GROQ_API_KEY: Groq API key
+# - ASTRA_DB_TOKEN: AstraDB application token
+# - ASTRA_DB_ENDPOINT: AstraDB API endpoint
+# - HF_TOKEN: HuggingFace token
